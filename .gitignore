@@ -14,3 +14,8 @@ ORBvoc.txt
 
 # VS Code / IDE files
 .vscode/
+*.engine
+*.onnx
+*.db3
+rosbag2_*/
+models/
