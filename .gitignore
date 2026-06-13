@@ -1,0 +1,16 @@
+# ROS 2 Build Folders
+build/
+install/
+log/
+
+# Python Virtual Environments
+slam_env/
+__pycache__/
+
+# Heavy weights and vocabularies
+*.pt
+*.txt
+ORBvoc.txt
+
+# VS Code / IDE files
+.vscode/

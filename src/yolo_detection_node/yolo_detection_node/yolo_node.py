@@ -5,43 +5,72 @@ from cv_bridge import CvBridge
 from ultralytics import YOLO
 import cv2
 
+# Import your brand new custom messages!
+from slam_msgs.msg import Detection, DetectionArray
+
 class YoloDetectionNode(Node):
     def __init__(self):
         super().__init__('yolo_detection_node')
         
-        # 1. Load the AI Model (We use 'yolov8n' - the nano version for super fast real-time speeds)
-        self.get_logger().info("Loading YOLOv8 AI Model...")
-        self.model = YOLO('yolov8n.pt') 
+        # Load the lightning-fast TensorRT engine we built
+        self.get_logger().info("Loading YOLOv8 TensorRT Engine...")
+        self.model = YOLO('/home/diksha/slam_ws/models/yolov8m.engine', task='detect') 
         
-        # 2. Tool to translate images between ROS 2 and OpenCV
         self.bridge = CvBridge()
         
-        # 3. Subscribe to the camera's raw pictures
         self.subscription = self.create_subscription(
-            Image,
-            '/zed/rgb/image',
-            self.image_callback,
-            10)
+            Image, '/zed/rgb/image', self.image_callback, 10)
             
-        # 4. Create a publisher to broadcast the pictures WITH the AI boxes drawn on them
-        self.publisher = self.create_publisher(Image, '/yolo/annotated_image', 10)
+        # We now publish the math array, not just the image
+        self.detection_pub = self.create_publisher(DetectionArray, '/yolo/detections', 10)
+        self.image_pub = self.create_publisher(Image, '/yolo/annotated_image', 10)
         
-        self.get_logger().info("YOLOv8 Node is ready and waiting for images!")
+        self.get_logger().info("YOLOv8 Tracking Node is running!")
 
     def image_callback(self, msg):
-        # Convert the ROS 2 image into a standard OpenCV image
         cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         
-        # Feed the image to the AI and tell it to look for objects
-        results = self.model.track(cv_image, persist=True, tracker="bytetrack.yaml", verbose=False)      
+        # Run inference with ByteTrack enabled
+        results = self.model.track(cv_image, persist=True, tracker="bytetrack.yaml", verbose=False)
         
-        # Grab the image that has all the boxes and labels drawn on it automatically
+        # Create our custom array message
+        det_array_msg = DetectionArray()
+        det_array_msg.header = msg.header # Keep exact timestamp
+        
+        # Extract the raw math for every object detected
+        if results[0].boxes is not None:
+            boxes = results[0].boxes
+            for i in range(len(boxes)):
+                det_msg = Detection()
+                
+                # Bounding box coordinates [x1, y1, x2, y2]
+                xyxy = boxes.xyxy[i].cpu().numpy()
+                det_msg.bbox_x1 = float(xyxy[0])
+                det_msg.bbox_y1 = float(xyxy[1])
+                det_msg.bbox_x2 = float(xyxy[2])
+                det_msg.bbox_y2 = float(xyxy[3])
+                
+                # Confidence and Class
+                det_msg.confidence = float(boxes.conf[i].cpu().numpy())
+                det_msg.class_id = int(boxes.cls[i].cpu().numpy())
+                det_msg.class_name = self.model.names[det_msg.class_id]
+                
+                # ByteTrack ID (If the tracker loses it briefly, it might be None)
+                if boxes.id is not None:
+                    det_msg.track_id = int(boxes.id[i].cpu().numpy())
+                else:
+                    det_msg.track_id = -1
+                    
+                det_array_msg.detections.append(det_msg)
+                
+        # Broadcast the raw data to the ROS 2 network
+        self.detection_pub.publish(det_array_msg)
+        
+        # (Optional) Still publish the annotated image for visual debugging
         annotated_frame = results[0].plot()
-        
-        # Convert it back to a ROS 2 format and broadcast it to the robot
         annotated_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding="bgr8")
-        annotated_msg.header = msg.header # Keep the exact same timestamp
-        self.publisher.publish(annotated_msg)
+        annotated_msg.header = msg.header
+        self.image_pub.publish(annotated_msg)
 
 def main(args=None):
     rclpy.init(args=args)
